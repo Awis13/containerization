@@ -86,9 +86,23 @@ public final class LinuxPod: Sendable {
     }
 
     /// Configuration for a container within the pod.
+    /// Which network a pod container is on.
+    public enum ContainerNetwork: Sendable {
+        /// The virtual machine's own: every such container shares it.
+        case shared
+        /// A network namespace of its own, empty but for loopback; something
+        /// in the virtual machine wires it up (a veth on a bridge, say).
+        case isolated
+    }
+
     public struct ContainerConfiguration: Sendable {
         /// Configuration for the init process of the container.
         public var process = LinuxProcessConfiguration()
+        /// The container's network: the VM's (the default) or its own.
+        public var network: ContainerNetwork = .shared
+        /// Run in the virtual machine's PID namespace, seeing every process
+        /// (for a helper that enters other containers' namespaces).
+        public var hostPID: Bool = false
         /// The container's CPU cgroup limit, in whole cores. May exceed the pod's VM for oversubscription.
         public var cpus: Int = 4
         /// The container's memory cgroup limit in bytes. May exceed the pod's VM for oversubscription.
@@ -1093,8 +1107,13 @@ extension LinuxPod {
                     LinuxNamespace(type: .uts),
                 ]
 
+                if case .isolated = container.config.network {
+                    namespaces.append(LinuxNamespace(type: .network))
+                }
                 // Either join pause container's pid ns or create a new one
-                if self.config.shareProcessNamespace, let pausePID = state.pauseProcess?.pid {
+                if container.config.hostPID {
+                    // The VM's PID namespace: no namespace of its own.
+                } else if self.config.shareProcessNamespace, let pausePID = state.pauseProcess?.pid {
                     let nsPath = "/proc/\(pausePID)/ns/pid"
 
                     self.logger?.debug(
@@ -1389,6 +1408,13 @@ extension LinuxPod {
     }
 
     /// List all container IDs in the pod.
+    /// The PID, in the virtual machine, of a started container's init process.
+    public func containerPID(_ containerID: String) async -> Int32? {
+        await self.state.withLock { state in
+            state.containers[containerID]?.process?.pid
+        }
+    }
+
     public func listContainers() async -> [String] {
         await self.state.withLock { state in
             Array(state.containers.keys)
