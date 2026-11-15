@@ -21,6 +21,13 @@ import CompilerPluginSupport
 import Foundation
 import PackageDescription
 
+// The crate engine's C API, built by scripts/build-crate.sh, where it is
+// (Apple platforms); Linux builds (vminitd) go without it.
+let crateEnginePath = "Frameworks/Crate.xcframework"
+let hasCrateEngine = FileManager.default.fileExists(
+    atPath: URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent(crateEnginePath).path)
+let crateEngine: [Target.Dependency] = hasCrateEngine ? ["CrateEngine"] : []
+
 let package = Package(
     name: "containerization",
     platforms: [.macOS("15.0"), .iOS("26.0")],
@@ -76,8 +83,7 @@ let package = Package(
                 "ContainerizationEXT4",
                 "ContainerizationNetlink",
                 "CShim",
-                "CrateEngine",
-            ],
+            ] + crateEngine,
             exclude: [
                 "../Containerization/SandboxContext/SandboxContext.proto"
             ],
@@ -87,11 +93,6 @@ let package = Package(
                 .linkedLibrary("slirp", .when(platforms: [.macOS])),
                 .linkedFramework("Hypervisor", .when(platforms: [.macOS])),
             ]
-        ),
-        // The crate engine's C API, built by scripts/build-crate.sh.
-        .binaryTarget(
-            name: "CrateEngine",
-            path: "Frameworks/Crate.xcframework"
         ),
         .executableTarget(
             name: "cratectl",
@@ -380,3 +381,7 @@ package.targets.append(
         path: "Sources/Integration"
     )
 )
+
+if hasCrateEngine {
+    package.targets.append(.binaryTarget(name: "CrateEngine", path: crateEnginePath))
+}
