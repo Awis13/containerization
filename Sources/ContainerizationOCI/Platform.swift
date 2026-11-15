@@ -36,6 +36,13 @@ public struct Platform: Sendable, Equatable {
     }
 
     public static var current: Self {
+        #if os(iOS) || os(tvOS) || os(watchOS) || os(visionOS)
+        // uname's machine is the device model there ("iPad16,10"), and every
+        // such device is arm64.
+        #if arch(arm64)
+        return .init(arch: "arm64", os: "linux", variant: nil)
+        #endif
+        #endif
         var systemInfo = utsname()
         uname(&systemInfo)
         let arch = withUnsafePointer(to: &systemInfo.machine) {
