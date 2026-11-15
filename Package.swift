@@ -23,7 +23,7 @@ import PackageDescription
 
 let package = Package(
     name: "containerization",
-    platforms: [.macOS("15.0")],
+    platforms: [.macOS("15.0"), .iOS("26.0")],
     products: [
         .library(name: "Containerization", targets: ["Containerization", "ContainerizationError"]),
         .library(name: "ContainerizationEXT4", targets: ["ContainerizationEXT4"]),
@@ -76,9 +76,31 @@ let package = Package(
                 "ContainerizationEXT4",
                 "ContainerizationNetlink",
                 "CShim",
+                "CrateEngine",
             ],
             exclude: [
                 "../Containerization/SandboxContext/SandboxContext.proto"
+            ],
+            linkerSettings: [
+                // libslirp: Homebrew's on a Mac; an iOS app links its own framework.
+                .unsafeFlags(["-L/opt/homebrew/lib"], .when(platforms: [.macOS])),
+                .linkedLibrary("slirp", .when(platforms: [.macOS])),
+                .linkedFramework("Hypervisor", .when(platforms: [.macOS])),
+            ]
+        ),
+        // The crate engine's C API, built by scripts/build-crate.sh.
+        .binaryTarget(
+            name: "CrateEngine",
+            path: "Frameworks/Crate.xcframework"
+        ),
+        .executableTarget(
+            name: "cratectl",
+            dependencies: [
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                "Containerization",
+                "ContainerizationExtras",
+                "ContainerizationOCI",
             ]
         ),
         .executableTarget(

@@ -27,3 +27,4 @@ vmlinux*
 _site/
 _serve/
 kernel/vmlinuz-x86_64
+Frameworks/
