@@ -1408,6 +1408,42 @@ extension LinuxPod {
     }
 
     /// List all container IDs in the pod.
+    /// Makes a stopped container startable again in the same virtual
+    /// machine: its root filesystem (still attached) mounted again, its DNS
+    /// and hosts written, its state back to created. Then `startContainer`
+    /// runs it afresh while the others keep running.
+    public func recreateContainer(_ containerID: String) async throws {
+        try await self.state.withLock { state in
+            let createdState = try state.phase.createdState("recreateContainer")
+            guard var container = state.containers[containerID] else {
+                throw ContainerizationError(.notFound, message: "container \(containerID) not found in pod")
+            }
+            guard container.state == .stopped else {
+                throw ContainerizationError(.invalidState, message: "container \(containerID) must be stopped to start it again")
+            }
+            let vm = createdState.vm
+            guard let attachments = vm.mounts[containerID], let rootfsAttachment = attachments.first else {
+                throw ContainerizationError(.notFound, message: "rootfs mount not found for container \(containerID)")
+            }
+            let dns = container.config.dns ?? self.config.dns
+            let hosts = container.config.hosts ?? self.config.hosts
+            try await vm.withAgent { agent in
+                var rootfs = rootfsAttachment.to
+                rootfs.destination = Self.guestRootfsPath(containerID)
+                try await agent.mount(rootfs)
+                if let dns {
+                    try await agent.configureDNS(config: dns, location: Self.guestRootfsPath(containerID))
+                }
+                if let hosts {
+                    try await agent.configureHosts(config: hosts, location: Self.guestRootfsPath(containerID))
+                }
+            }
+            container.process = nil
+            container.state = .created
+            state.containers[containerID] = container
+        }
+    }
+
     /// The PID, in the virtual machine, of a started container's init process.
     public func containerPID(_ containerID: String) async -> Int32? {
         await self.state.withLock { state in

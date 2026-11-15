@@ -295,6 +295,7 @@ struct RunCommand: ParsableCommand {
             .ipc: CLONE_NEWIPC,
             .user: CLONE_NEWUSER,
             .cgroup: CLONE_NEWCGROUP,
+            .network: CLONE_NEWNET,
         ]
 
         guard let namespaces = namespaces else {
