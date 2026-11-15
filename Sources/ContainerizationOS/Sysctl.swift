@@ -25,7 +25,7 @@ import Foundation
 
 /// Helper type to deal with system control functionalities.
 public struct Sysctl {
-    #if os(macOS)
+    #if canImport(Darwin)
     /// Simple `sysctlbyname` wrapper.
     public static func byName(_ name: String) throws -> Int64 {
         var num: Int64 = 0

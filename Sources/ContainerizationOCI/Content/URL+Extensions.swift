@@ -19,7 +19,7 @@ import Foundation
 extension URL {
     /// Returns the unescaped absolutePath of a URL joined by separator.
     public func absolutePath() -> String {
-        #if os(macOS)
+        #if canImport(Darwin)
         return self.path(percentEncoded: false)
         #else
         return self.path

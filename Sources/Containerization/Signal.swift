@@ -205,7 +205,7 @@ public struct Signal: RawRepresentable, Hashable, Sendable {
     ]
 }
 
-#if os(macOS)
+#if canImport(Darwin)
 
 extension Signal {
     /// All signals for the macOS host.
@@ -269,7 +269,7 @@ extension Signal {
     }
 }
 
-#if os(macOS)
+#if canImport(Darwin)
 extension Signal {
     /// Converts a macOS signal to the equivalent Linux signal.
     public func linuxSignal() -> Signal? {

@@ -14,7 +14,7 @@
 // limitations under the License.
 //===----------------------------------------------------------------------===//
 
-#if os(macOS)
+#if canImport(Darwin)
 import Foundation
 import ContainerizationOS
 

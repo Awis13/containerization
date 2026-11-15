@@ -208,7 +208,7 @@ extension ArchiveWriter {
             return
         }
 
-        #if os(macOS)
+        #if canImport(Darwin)
         let created = Date(timeIntervalSince1970: Double(statInfo.st_ctimespec.tv_sec))
         let access = Date(timeIntervalSince1970: Double(statInfo.st_atimespec.tv_sec))
         let modified = Date(timeIntervalSince1970: Double(statInfo.st_mtimespec.tv_sec))
@@ -290,7 +290,7 @@ extension ArchiveWriter {
         rootEntry.owner = rootStat.st_uid
         rootEntry.group = rootStat.st_gid
         rootEntry.permissions = rootStat.st_mode
-        #if os(macOS)
+        #if canImport(Darwin)
         rootEntry.creationDate = Date(timeIntervalSince1970: Double(rootStat.st_ctimespec.tv_sec))
         rootEntry.contentAccessDate = Date(timeIntervalSince1970: Double(rootStat.st_atimespec.tv_sec))
         rootEntry.modificationDate = Date(timeIntervalSince1970: Double(rootStat.st_mtimespec.tv_sec))

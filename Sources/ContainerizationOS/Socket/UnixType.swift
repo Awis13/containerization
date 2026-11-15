@@ -75,7 +75,7 @@ public struct UnixType: SocketType, Sendable, CustomStringConvertible {
             socketName.withCString { strncpy(ptr, $0, nameLength) }
         }
 
-        #if os(macOS)
+        #if canImport(Darwin)
         addr.sun_len = UInt8(MemoryLayout<UInt8>.size + MemoryLayout<sa_family_t>.size + socketName.utf8.count + 1)
         #endif
         self._addr = addr
@@ -120,7 +120,7 @@ public struct UnixType: SocketType, Sendable, CustomStringConvertible {
     }
 
     public func beforeListen(fd: Int32) throws {
-        #if os(macOS)
+        #if canImport(Darwin)
         if let perms = self.perms {
             guard chmod(self.path, perms) == 0 else {
                 throw Socket.errnoToError(msg: "chmod failed")

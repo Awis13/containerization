@@ -21,7 +21,7 @@ import Crypto
 import Foundation
 import NIOFoundationCompat
 
-#if os(macOS)
+#if canImport(Darwin)
 import _NIOFileSystem
 #endif
 
@@ -227,7 +227,7 @@ extension RegistryClient {
         }
     }
 
-    #if os(macOS)
+    #if canImport(Darwin)
     /// Fetch a blob from remote registry and write the contents into a file in the provided directory.
     public func fetchBlob(name: String, descriptor: Descriptor, into file: URL, progress: ProgressHandler?) async throws -> (Int64, SHA256Digest) {
         var hasher = SHA256()

@@ -80,7 +80,7 @@ public final class AsyncSignalHandler: Sendable {
 
     /// Create a new `AsyncSignalHandler` that catches all signals.
     public static func catchAll() -> AsyncSignalHandler {
-        #if os(macOS)
+        #if canImport(Darwin)
         let range = 1...31
         #else
         let range = 1...64

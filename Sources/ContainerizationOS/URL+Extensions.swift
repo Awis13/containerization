@@ -42,7 +42,7 @@ extension URL {
 
     public func resolvingSymlinksInPathWithPrivate() -> URL {
         let url = self.resolvingSymlinksInPath()
-        #if os(macOS)
+        #if canImport(Darwin)
         let parts = url.pathComponents
         if parts.count > 1 {
             if (parts.first == "/") && ["tmp", "var", "etc"].contains(parts[1]) {

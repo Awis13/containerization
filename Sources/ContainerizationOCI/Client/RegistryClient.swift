@@ -24,7 +24,7 @@ import NIO
 import NIOHTTP1
 import NIOSSL
 
-#if os(macOS)
+#if canImport(Darwin)
 import Network
 #endif
 
@@ -268,7 +268,7 @@ public final class RegistryClient: ContentClient {
             } catch let err as RegistryClient.Error {
                 throw err
             } catch {
-                #if os(macOS)
+                #if canImport(Darwin)
                 if let err = error as? NWError {
                     if err.errorCode == kDNSServiceErr_NoSuchRecord {
                         let message: String
