@@ -1408,6 +1408,44 @@ extension LinuxPod {
     }
 
     /// List all container IDs in the pod.
+    /// Creates directories and writes files in a pod volume of a created
+    /// pod, before the containers that bind parts of it start. Paths are
+    /// relative to the volume's root; files replace what is there.
+    public func prepareVolume(
+        _ name: String,
+        directories: [String],
+        files: [(path: String, data: Data, mode: UInt32)]
+    ) async throws {
+        try await self.state.withLock { state in
+            let createdState = try state.phase.createdState("prepareVolume")
+            let root = Self.guestVolumePath(name)
+            let full: @Sendable (String) -> String = { p in
+                root + "/" + p.split(separator: "/").filter { $0 != ".." && $0 != "." }.joined(separator: "/")
+            }
+            try await createdState.vm.withAgent { agent in
+                for dir in directories {
+                    try await agent.mkdir(path: full(dir), all: true, perms: 0o777)
+                }
+                let chunk = 1 << 20
+                for file in files {
+                    var flags = WriteFileFlags()
+                    flags.create = true
+                    flags.createParentDirectories = true
+                    let first = file.data.prefix(chunk)
+                    try await agent.writeFile(path: full(file.path), data: Data(first), flags: flags, mode: file.mode)
+                    var offset = first.count
+                    flags.append = true
+                    while offset < file.data.count {
+                        let part = file.data[file.data.startIndex + offset ..< file.data.startIndex + min(offset + chunk, file.data.count)]
+                        try await agent.writeFile(path: full(file.path), data: Data(part), flags: flags, mode: file.mode)
+                        offset += part.count
+                    }
+                }
+                try await agent.sync()
+            }
+        }
+    }
+
     /// Makes a stopped container startable again in the same virtual
     /// machine: its root filesystem (still attached) mounted again, its DNS
     /// and hosts written, its state back to created. Then `startContainer`
@@ -1418,6 +1456,8 @@ extension LinuxPod {
             guard var container = state.containers[containerID] else {
                 throw ContainerizationError(.notFound, message: "container \(containerID) not found in pod")
             }
+            // Never started yet: startable as it is.
+            if container.state == .created { return }
             guard container.state == .stopped else {
                 throw ContainerizationError(.invalidState, message: "container \(containerID) must be stopped to start it again")
             }
