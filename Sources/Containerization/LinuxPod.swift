@@ -1484,6 +1484,21 @@ extension LinuxPod {
         }
     }
 
+    /// Forgets a stopped container, so one of the same ID can be added
+    /// again (to a running pod, through hotplug).
+    public func removeContainer(_ containerID: String) async throws {
+        try await self.state.withLock { state in
+            guard let container = state.containers[containerID] else { return }
+            guard container.state == .stopped || container.state == .errored || container.state == .registered else {
+                throw ContainerizationError(.invalidState, message: "container \(containerID) must be stopped to remove it")
+            }
+            if case .created(let createdState) = state.phase {
+                try? await createdState.vm.releaseHotplug(id: containerID)
+            }
+            state.containers[containerID] = nil
+        }
+    }
+
     /// The PID, in the virtual machine, of a started container's init process.
     public func containerPID(_ containerID: String) async -> Int32? {
         await self.state.withLock { state in

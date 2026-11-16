@@ -28,6 +28,7 @@ public struct CrateVirtualMachineManager: VirtualMachineManager {
     private let backend: CrateVirtualMachineInstance.CPUBackend
     private let jitRegion: CrateJITRegion?
     private let portForwards: [CratePortForward]
+    private let diskSlots: Int
     private let group: EventLoopGroup?
     private let logger: Logger?
 
@@ -37,6 +38,7 @@ public struct CrateVirtualMachineManager: VirtualMachineManager {
         backend: CrateVirtualMachineInstance.CPUBackend = .auto,
         jitRegion: CrateJITRegion? = nil,
         portForwards: [CratePortForward] = [],
+        diskSlots: Int = 0,
         group: EventLoopGroup? = nil,
         logger: Logger? = nil
     ) {
@@ -45,6 +47,7 @@ public struct CrateVirtualMachineManager: VirtualMachineManager {
         self.backend = backend
         self.jitRegion = jitRegion
         self.portForwards = portForwards
+        self.diskSlots = diskSlots
         self.group = group
         self.logger = logger
     }
@@ -68,6 +71,7 @@ public struct CrateVirtualMachineManager: VirtualMachineManager {
                 c.backend = self.backend
                 c.jitRegion = self.jitRegion
                 c.portForwards = self.portForwards
+                c.diskSlots = self.diskSlots
             })
     }
 }

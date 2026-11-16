@@ -17,6 +17,7 @@
 #if canImport(CrateEngine)
 import ContainerizationError
 import ContainerizationExtras
+import ContainerizationOCI
 import CrateEngine
 import Foundation
 import Logging
@@ -107,6 +108,9 @@ public final class CrateVirtualMachineInstance: Sendable {
         public var backend: CPUBackend = .auto
         public var jitRegion: CrateJITRegion?
         public var portForwards: [CratePortForward] = []
+        /// Empty disks the machine boots with, for containers added while it
+        /// runs: each takes one for its rootfs (`hotplug`) and gives it back.
+        public var diskSlots: Int = 0
         /// How long to wait for the guest's agent after starting.
         public var agentTimeout: Duration = .seconds(180)
 
@@ -134,6 +138,10 @@ public final class CrateVirtualMachineInstance: Sendable {
     }
 
     private let config: Configuration
+    /// The guest's name for each disk slot (vd<letter>), and the container
+    /// whose rootfs is in it.
+    private let slotLetters: [Character]
+    private let _slotOwners: Mutex<[String?]>
     private let machine: Mutex<MachineBox>
     private let console: ConsoleSink
     private let lock: AsyncLock
@@ -179,6 +187,9 @@ public final class CrateVirtualMachineInstance: Sendable {
             attachments[id] = try mounts.map { try AttachedFilesystem(mount: $0, allocator: allocator) }
         }
         self._mounts = Mutex(attachments)
+        // The slots come after every boot disk, so they take the next letters.
+        self.slotLetters = try (0..<config.diskSlots).map { _ in try allocator.allocate() }
+        self._slotOwners = Mutex(Array(repeating: nil, count: config.diskSlots))
         self.machine = Mutex(MachineBox(pointer: nil))
     }
 
@@ -252,6 +263,9 @@ public final class CrateVirtualMachineInstance: Sendable {
         for disk in try disks() {
             let flags: UInt32 = disk.readOnly ? UInt32(CRATE_DISK_READ_ONLY) : 0
             try Self.check(crate_config_add_disk(c, disk.path, flags), "disk \(disk.path)")
+        }
+        if config.diskSlots > 0 {
+            try Self.check(crate_config_add_disk_slots(c, UInt32(config.diskSlots)), "disk slots")
         }
 
         if !config.interfaces.isEmpty {
@@ -383,6 +397,94 @@ extension CrateVirtualMachineInstance: VirtualMachineInstance {
             }
         }
     }
+
+    // MARK: Hotplug, through disk slots
+
+    /// Puts a container's rootfs into a free disk slot and waits until the
+    /// guest sees the disk (its size changes a moment after).
+    public func hotplug(_ block: Mount, id: String) async throws -> AttachedFilesystem {
+        guard block.isBlock else {
+            throw ContainerizationError(.unsupported, message: "crate hotplugs block devices only")
+        }
+        let index: Int? = _slotOwners.withLock { owners in
+            guard let i = owners.firstIndex(where: { $0 == nil }) else { return nil }
+            owners[i] = id
+            return i
+        }
+        guard let index else {
+            throw ContainerizationError(.unsupported, message: "no free disk slot: restart the pod to add more containers")
+        }
+        let device = "/dev/vd\(slotLetters[index])"
+        do {
+            let flags: UInt32 = block.options.contains("ro") ? UInt32(CRATE_DISK_READ_ONLY) : 0
+            let m = try pointer()
+            try Self.check(crate_machine_set_disk_slot(m, UInt32(index), block.source, flags), "disk slot \(index)")
+            try await waitForDisk(device, type: block.type)
+        } catch {
+            if let m = try? pointer() { _ = crate_machine_set_disk_slot(m, UInt32(index), nil, 0) }
+            _slotOwners.withLock { $0[index] = nil }
+            throw error
+        }
+        return AttachedFilesystem(type: block.type, source: device, destination: block.destination, options: block.options)
+    }
+
+    /// Mounts the disk somewhere out of the way until that works: the guest
+    /// takes the new size from a config interrupt, on a worker of its own.
+    private func waitForDisk(_ device: String, type: String) async throws {
+        let probe = "/run/pier-slot\(device.dropFirst("/dev/".count))"
+        let agent = try await dialAgent()
+        defer { Task { try? await agent.close() } }
+        try await agent.mkdir(path: probe, all: true, perms: 0o700)
+        var lastError: Error?
+        for _ in 0..<100 {
+            do {
+                try await agent.mount(ContainerizationOCI.Mount(type: type, source: device, destination: probe, options: ["ro"]))
+                try await agent.umount(path: probe, flags: 0)
+                return
+            } catch {
+                lastError = error
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        throw ContainerizationError(.timeout, message: "\(device) never showed up in the guest: \(lastError.map { "\($0)" } ?? "")")
+    }
+
+    public func registerMounts(id: String, rootfs: AttachedFilesystem, additionalMounts: [Mount]) throws {
+        if additionalMounts.contains(where: { $0.isBlock }) {
+            throw ContainerizationError(.unsupported, message: "a container added to a running pod can have no disks of its own besides its rootfs")
+        }
+        // The rest (proc, tmpfs, binds) need no device: their sources stay.
+        let rest = additionalMounts.map {
+            AttachedFilesystem(type: $0.type, source: $0.source, destination: $0.destination, options: $0.options)
+        }
+        _mounts.withLock { $0[id, default: []].append(contentsOf: [rootfs] + rest) }
+    }
+
+    /// Takes the container's rootfs out of its slot (unmounted by then).
+    public func releaseHotplug(id: String) async throws {
+        let indexes: [Int] = _slotOwners.withLock { owners in
+            let mine = owners.indices.filter { owners[$0] == id }
+            for i in mine { owners[i] = nil }
+            return mine
+        }
+        // A container the machine booted with keeps its disk and mounts.
+        guard !indexes.isEmpty else { return }
+        if let m = try? pointer() {
+            for i in indexes { _ = crate_machine_set_disk_slot(m, UInt32(i), nil, 0) }
+        }
+        _mounts.withLock { state in
+            // Added with its rootfs: all of it goes with the disk.
+            state.removeValue(forKey: id)
+        }
+    }
+
+    public func hotplugVirtioFS(_ mounts: [Mount], id: String) async throws {
+        if !mounts.isEmpty {
+            throw ContainerizationError(.unsupported, message: "crate has no virtiofs")
+        }
+    }
+
+    public func releaseVirtioFS(id: String) async throws {}
 
     public func dialAgent() async throws -> Vminitd {
         try await lock.withLock { _ in
