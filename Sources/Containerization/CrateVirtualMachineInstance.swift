@@ -404,12 +404,16 @@ extension CrateVirtualMachineInstance: VirtualMachineInstance {
 
     public func listen(_ port: UInt32) throws -> VsockListener {
         let m = try pointer()
-        let box = MachineBox(pointer: m)
-        let stream = VsockListener(port: port, stopListen: { port in
-            _ = crate_vsock_unlisten(box.pointer, port)
-            ListenerRegistry.shared.remove(port)
+        let id = ListenerRegistry.shared.nextID()
+        let stream = VsockListener(port: port, stopListen: { [weak self] port in
+            // Under the machine's lock: stop() frees it there, so a machine
+            // already gone is left alone.
+            self?.machine.withLock { box in
+                if let p = box.pointer { _ = crate_vsock_unlisten(p, port) }
+            }
+            ListenerRegistry.shared.remove(id)
         })
-        let context = ListenerRegistry.shared.add(port, stream)
+        let context = ListenerRegistry.shared.add(id, stream)
         let status = crate_vsock_listen(
             m, port,
             { context, _, fd in
@@ -424,7 +428,7 @@ extension CrateVirtualMachineInstance: VirtualMachineInstance {
                 }
             }, context)
         if status != CRATE_OK {
-            ListenerRegistry.shared.remove(port)
+            ListenerRegistry.shared.remove(id)
             try Self.check(status, "vsock listen \(port)")
         }
         return stream
@@ -437,19 +441,28 @@ final class ListenerBox: @unchecked Sendable {
     init(_ listener: VsockListener) { self.listener = listener }
 }
 
+/// Listeners by registration, not by port: a refused second listen on a
+/// port must not drop the box the first one still uses.
 final class ListenerRegistry: Sendable {
     static let shared = ListenerRegistry()
-    private let boxes = Mutex<[UInt32: ListenerBox]>([:])
+    private let state = Mutex<(next: UInt64, boxes: [UInt64: ListenerBox])>((0, [:]))
 
-    func add(_ port: UInt32, _ listener: VsockListener) -> UnsafeMutableRawPointer {
+    func nextID() -> UInt64 {
+        state.withLock { s in
+            s.next += 1
+            return s.next
+        }
+    }
+
+    func add(_ id: UInt64, _ listener: VsockListener) -> UnsafeMutableRawPointer {
         let box = ListenerBox(listener)
-        boxes.withLock { $0[port] = box }
+        state.withLock { $0.boxes[id] = box }
         return Unmanaged.passUnretained(box).toOpaque()
     }
 
-    func remove(_ port: UInt32) {
+    func remove(_ id: UInt64) {
         // crate stops calling the acceptor before unlisten returns.
-        _ = boxes.withLock { $0.removeValue(forKey: port) }
+        _ = state.withLock { $0.boxes.removeValue(forKey: id) }
     }
 }
 
