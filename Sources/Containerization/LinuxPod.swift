@@ -1196,6 +1196,10 @@ extension LinuxPod {
                 )
             }
 
+            // Whether the guest let go of the rootfs: only then may its device
+            // be taken away (a disk slot reused with ext4 still mounted on it
+            // would get another container's writes).
+            var unmounted = false
             do {
                 // Check if the vm is even still running
                 if createdState.vm.state == .stopped {
@@ -1214,6 +1218,7 @@ extension LinuxPod {
                         flags: 0
                     )
                 }
+                unmounted = true
 
                 // Release the hotplug device and virtiofs shares so they can be reused by new containers
                 try await createdState.vm.releaseHotplug(id: containerID)
@@ -1226,9 +1231,10 @@ extension LinuxPod {
                 container.state = .stopped
                 state.containers[containerID] = container
             } catch {
-                // Try to release the hotplug device and virtiofs shares even on error
-                try? await createdState.vm.releaseHotplug(id: containerID)
-                try? await createdState.vm.releaseVirtioFS(id: containerID)
+                if unmounted {
+                    try? await createdState.vm.releaseHotplug(id: containerID)
+                    try? await createdState.vm.releaseVirtioFS(id: containerID)
+                }
 
                 container.state = .errored
                 container.process = nil

@@ -188,8 +188,9 @@ public final class CrateVirtualMachineInstance: Sendable {
         }
         self._mounts = Mutex(attachments)
         // The slots come after every boot disk, so they take the next letters.
-        self.slotLetters = try (0..<config.diskSlots).map { _ in try allocator.allocate() }
-        self._slotOwners = Mutex(Array(repeating: nil, count: config.diskSlots))
+        let slots = max(0, config.diskSlots)
+        self.slotLetters = try (0..<slots).map { _ in try allocator.allocate() }
+        self._slotOwners = Mutex(Array(repeating: nil, count: slots))
         self.machine = Mutex(MachineBox(pointer: nil))
     }
 
@@ -264,8 +265,8 @@ public final class CrateVirtualMachineInstance: Sendable {
             let flags: UInt32 = disk.readOnly ? UInt32(CRATE_DISK_READ_ONLY) : 0
             try Self.check(crate_config_add_disk(c, disk.path, flags), "disk \(disk.path)")
         }
-        if config.diskSlots > 0 {
-            try Self.check(crate_config_add_disk_slots(c, UInt32(config.diskSlots)), "disk slots")
+        if !slotLetters.isEmpty {
+            try Self.check(crate_config_add_disk_slots(c, UInt32(slotLetters.count)), "disk slots")
         }
 
         if !config.interfaces.isEmpty {
@@ -417,11 +418,10 @@ extension CrateVirtualMachineInstance: VirtualMachineInstance {
         let device = "/dev/vd\(slotLetters[index])"
         do {
             let flags: UInt32 = block.options.contains("ro") ? UInt32(CRATE_DISK_READ_ONLY) : 0
-            let m = try pointer()
-            try Self.check(crate_machine_set_disk_slot(m, UInt32(index), block.source, flags), "disk slot \(index)")
+            try setSlot(index, block.source, flags)
             try await waitForDisk(device, type: block.type)
         } catch {
-            if let m = try? pointer() { _ = crate_machine_set_disk_slot(m, UInt32(index), nil, 0) }
+            try? setSlot(index, nil, 0)
             _slotOwners.withLock { $0[index] = nil }
             throw error
         }
@@ -449,6 +449,14 @@ extension CrateVirtualMachineInstance: VirtualMachineInstance {
         throw ContainerizationError(.timeout, message: "\(device) never showed up in the guest: \(lastError.map { "\($0)" } ?? "")")
     }
 
+    /// Under the machine's lock, as stop() frees the machine there.
+    private func setSlot(_ index: Int, _ path: String?, _ flags: UInt32) throws {
+        try machine.withLock { box in
+            guard let m = box.pointer else { throw ContainerizationError(.invalidState, message: "the machine is not running") }
+            try Self.check(crate_machine_set_disk_slot(m, UInt32(index), path, flags), "disk slot \(index)")
+        }
+    }
+
     public func registerMounts(id: String, rootfs: AttachedFilesystem, additionalMounts: [Mount]) throws {
         if additionalMounts.contains(where: { $0.isBlock }) {
             throw ContainerizationError(.unsupported, message: "a container added to a running pod can have no disks of its own besides its rootfs")
@@ -469,9 +477,7 @@ extension CrateVirtualMachineInstance: VirtualMachineInstance {
         }
         // A container the machine booted with keeps its disk and mounts.
         guard !indexes.isEmpty else { return }
-        if let m = try? pointer() {
-            for i in indexes { _ = crate_machine_set_disk_slot(m, UInt32(i), nil, 0) }
-        }
+        for i in indexes { try? setSlot(i, nil, 0) }
         _mounts.withLock { state in
             // Added with its rootfs: all of it goes with the disk.
             state.removeValue(forKey: id)
